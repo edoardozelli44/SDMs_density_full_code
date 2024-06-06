@@ -174,7 +174,7 @@ n.boot <- 150
 # setup objects to save information from bootstraps
 
 # for AUC and P
-deviance_mat <- array(0, c(n.boot,2)) # for saving model fit metrics
+deviance_mat <- array(0, c(n.boot,3)) # for saving model fit metrics
 
 # for variable relative influence 
 var_mat_PA <- array(0, c(length(imp.var),n.boot)) 
@@ -243,7 +243,16 @@ for(i in 1:n.boot){
   auc <- performance(pred.1, "auc")
   AUC <- unlist(slot(auc, "y.values")) 
   deviance_mat[i,1] <- AUC
-  
+
+  # TSS
+  actuals <- test_taxa.F$taxa.PA
+  predicted <- predict(model_PA, test_taxa.F[,imp.var], type = "prob")[,2]
+  myROC <- pROC::roc(actuals, predicted, quiet = T)
+  myROC$auc # this is the AUC
+  Sens_spec <- pROC::coords(myROC, x="best", input="threshold", best.method="youden",transpose = FALSE)
+  TSS <- mean(Sens_spec[,2]) + mean(Sens_spec[,2])-1 
+  deviance_mat[i,2] <- TSS
+    
   # Abundance (Pearson's correlation)
   
   # observed abundance = test_taxa.name.F_1$taxa.name.D
@@ -252,7 +261,7 @@ for(i in 1:n.boot){
   actual <- as.vector(test_taxa.name.F_1$taxa.name.D)
   predicted <- as.vector(pred.AB)
   P <- cor(actual, predicted)
-  deviance_mat[i,2] <- P
+  deviance_mat[i,3] <- P
   
   ################################################################################
   
@@ -302,9 +311,11 @@ for(i in 1:n.boot){
 
 # calculate mean and SD of model fit metrics
 mean_AUC <- mean(deviance_mat[,1])
-mean_p <- mean(deviance_mat[,2])
+mean_TSS<- mean(deviance_mat[,2])
+mean_p <- mean(deviance_mat[,3])
 SD_AUC <- sd(deviance_mat[,1])
-SD_p <- sd(deviance_mat[,2])
+SD_TSS <- sd(deviance_mat[,2])
+SD_p <- sd(deviance_mat[,3])
 
 # calculate mean and SD of variables relative influence 
 mean_imp.var_PA <- apply(var_mat_PA, 1, mean)
