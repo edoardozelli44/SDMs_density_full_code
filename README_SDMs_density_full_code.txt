@@ -1087,3 +1087,118 @@ for (i in c(1:length(imp.var))) {
   # if (i == 1) title('Sample size - 1000')
 } 
 dev.off()
+
+###=============================================================================
+###=============================================================================
+
+# ENV COVERAGE
+
+####==================    LOAD FILES AND PACKAGES         ==========================####
+require(raster); require(pROC); require(dismo)
+
+# load env data
+setwd("C:/Users/ez14/OneDrive - The University of Waikato/EDO/Chapter 1/Training_Fabrice/R_files/GD_final")
+load("Pred_1km_Present.RData")
+load("Pred_1km_SSP2.RData")
+load("Pred_1km_SSP3.RData")
+
+#load one of your rasters which you will use a various points
+setwd("C:/Users/ez14/OneDrive - The University of Waikato/EDO/Chapter 1/Training_Fabrice/Present_Env_predictors_EEZ")
+R <- raster("Present_bot_sal_EEZ.tif")
+R[R>0] <- 1 # turn this into a mask
+plot(R)
+
+# load biological data - ALL THE DTIS
+DF <- Bio.D
+
+####==================    PREPARE THE DATA FOR MODELLING          ==========================####
+# assign the unique spatial identifier from your raster mask to all DTIS locations - this is to 
+# make sure when you randomly sample the EEZ for your absences you don't pick the same place as your 
+# DTIS location
+DF$FID <- cellFromXY(R, DF[,c("X","Y")])
+# set all your DTIS locations to "present" - i.e., you know have sampled that environmental condition 
+# and at some point used it in your models.
+DF$sample.sites <- 1
+
+# ABSENCES
+Pred_1km_U <-  Pred_1km_Present
+Pred_1km_U$FID <-  cellFromXY(R, as.matrix(cbind(Pred_1km_Present$X, Pred_1km_Present$Y)))
+Pred_1km_U <- na.omit(Pred_1km_Present[!Pred_1km_U$FID %in% DF$FID,]) # no overlap with presences
+set.seed(5)
+# sampling randomly from the full environemtnal space (minus the DTIS locations; with 4 times the absences as presences)
+train_ind <- sample(seq_len(nrow(Pred_1km_U)), size = nrow(DF)*4)
+preddat_EC <- Pred_1km_U[train_ind, ]
+preddat_EC <- preddat_EC[,-c(1:2)] # remove the x y coords - don't need them - just keep the environemtnal variable values
+
+# set the sampled absences as 0 (using the same col name as for the presences)
+preddat_EC$sample.sites <- 0 # absent
+
+#extract env info (from our predictorStacks - e.g., Bathy or OXY)
+# Present_env <- as.data.frame(raster::extract(x=PredStack1km_Present, y=xy, method='simple', buffer=NULL, small=FALSE, cellnumbers=FALSE))
+# colnames(Present_env) <- c("Aragonite","Bathy","Bot_sal","Bpi_broad","Bpi_fine",
+#                            "Calcite","Detr_flux","Nitro","OXY_C","Prof","Slope")
+
+# bind DTIS biodata with env variables
+DF <- cbind(DF,Present_env)
+DF_TRY <- na.omit(DF[,colnames(preddat_EC)])
+
+# bind by row the DTIS data and the randomly sampled absences - make sure you have the environemtnal data from your models 
+# and that the names for these in the collumns of the dataframes are the same.
+DF_ES <- rbind(preddat_EC,DF_TRY) # only keep the 'sample.sites' colum and the environemtnal variables column
+DF_ES$sample.sites <- as.factor(DF_ES$sample.sites) # turn the P/A to factor for RF analysis
+
+# all the environmental variables you used in your models
+all.var <- c("Aragonite","Bathy","Bot_sal","Bpi_broad","Bpi_fine",
+             "Calcite","Detr_flux","Nitro","OXY_C","Prof","Slope") 
+
+####==================    MODELLING AND PREDICTIONS         ==========================####
+# RANDOM FOREST MODEL FOR YOUR Presence/absence ~ environmental variables
+# make sure this a really big model - you're going to run it once so need to use lots of trees etc. 
+M1 <- randomForest(x = DF_ES[,all.var],
+                   y = DF_ES$sample.sites,
+                   mtryStart = 2,
+                   ntreeTry = 2000,
+                   stepFactor = 2,
+                   improve = 0.0005,
+                   trace = T, plot = T, doBest = T) # for PA
+
+# Check AUC to make sure it's ok (> 0.8 should be fine)
+preds <- predict(M1, type="prob")[,2]
+pROC::roc(DF_ES$sample.sites, preds, quiet = T)$auc
+
+#Present day prediction
+Env.Cov.Present <- as.numeric(round(predict(M1, Pred_1km_Present, type = "prob")[,2], digits = 2))
+
+# future prediction
+Env.Cov.SSP2 <- as.numeric(round(predict(M1, Pred_1km_SSP2, type = "prob")[,2], digits = 2))
+Env.Cov.SSP3 <- as.numeric(round(predict(M1, Pred_1km_SSP3, type = "prob")[,2], digits = 2))
+
+# turn each of these predictions (this is just for the present day env coverage) into a raster,plot them and save them 
+t_PRESENT <- rasterFromXYZ(data.frame(x = Pred_1km_Present[,1],
+                              y = Pred_1km_Present[,2],
+                              z = Env.Cov.Present),
+                              crs = crs(R)) # use whatever projection use have for your models
+plot(t_PRESENT)
+writeRaster(t_PRESENT,filename = "Env_cov_PRESENT.tif", overwrite=T) # write raster file
+
+#SSP2
+t_SSP2 <- rasterFromXYZ(data.frame(x = Pred_1km_SSP2[,1],
+                              y = Pred_1km_SSP2[,2],
+                              z = Env.Cov.SSP2),
+                              crs = crs(R)) # use whatever projection use have for your models
+plot(t_SSP2)
+
+
+#SSP3
+t_SSP3 <- rasterFromXYZ(data.frame(x = Pred_1km_SSP3[,1],
+                              y = Pred_1km_SSP3[,2],
+                              z = Env.Cov.SSP3),
+                             crs = crs(R)) # use whatever projection use have for your models
+plot(t_SSP3)
+
+# SAVE
+
+setwd("C:/Users/ez14/OneDrive - The University of Waikato/EDO/Chapter 1/Training_Fabrice/R_files/2_Env_Coverage")
+writeRaster(t_PRESENT,filename = "Env_cov_PRESENT.tif", overwrite=T) # write raster file
+writeRaster(t_SSP2,filename = "Env_cov_SSP2.tif", overwrite=T) # write raster file
+writeRaster(t_SSP3,filename = "Env_cov_SSP3.tif", overwrite=T) # write raster file
